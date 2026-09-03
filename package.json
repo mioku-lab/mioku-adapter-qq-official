@@ -1,0 +1,45 @@
+{
+  "name": "mioku-adapter-qq-official",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "QQ official bot (QQ 开放平台 OpenAPI v2) adapter for mioku.",
+  "keywords": [
+    "mioku"
+  ],
+  "engines": {
+    "node": ">= 22.18.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsdown -w",
+    "build": "tsdown"
+  },
+  "bin": {
+    "mioku-adapter-qq-official": "./dist/cli.mjs"
+  },
+  "exports": {
+    ".": {
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.mjs"
+    },
+    "./cli": {
+      "require": "./dist/cli.cjs",
+      "import": "./dist/cli.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "mioku": "^1.0.0"
+  },
+  "dependencies": {
+    "consola": "^3.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.8",
+    "mioku": "workspace:*",
+    "tsdown": "^0.18.4",
+    "typescript": "^5.9.3"
+  }
+}
