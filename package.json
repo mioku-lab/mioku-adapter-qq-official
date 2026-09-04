@@ -1,7 +1,7 @@
 {
   "name": "mioku-adapter-qq-official",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "QQ official bot (QQ 开放平台 OpenAPI v2) adapter for mioku.",
   "keywords": [
     "mioku"
