@@ -112,9 +112,9 @@ const computeIsToMe = (
   eventType: MessageType,
   d: QQMessagePayload,
 ): boolean => {
-  if (eventType === "GROUP_AT_MESSAGE_CREATE") return true;
   const { bot, logger, selfOpenids } = params;
   const botId = bot.bot_id;
+  if (eventType === "GROUP_AT_MESSAGE_CREATE") return true;
   const mentionIds = new Set<string>();
   for (const mention of d.mentions ?? []) {
     if (!mention || typeof mention !== "object") continue;

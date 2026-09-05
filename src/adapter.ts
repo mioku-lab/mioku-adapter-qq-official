@@ -40,7 +40,6 @@ import {
 } from "./config";
 import { QQClient } from "./client";
 import { QQGateway } from "./gateway";
-import { EventDeduplicator } from "./dedup";
 import { MediaUploader } from "./media";
 import { PassiveManager } from "./passive";
 import { MessageStore } from "./store";
@@ -127,7 +126,6 @@ const buildAdapter = (
   let unregisterStatus: (() => void) | null = null;
   let unregisterCapabilities: Array<() => void> = [];
   const groups = new Map<string, import("mioku").GroupInfo>();
-  const dedup = new EventDeduplicator();
   // 机器人在 openid 体系里的自身 id(官方 READY 只给平台 id,群消息 @ 令牌用的是 openid,
   // 从「内容中出现但 mentions 未收录」的 @ 令牌里学习)
   const selfOpenids = new Set<string>();
@@ -349,10 +347,6 @@ const buildAdapter = (
   }): Promise<void> => {
     const { t, d, id } = dispatch;
     if (!t) return;
-    if (dedup.isDuplicate(id)) {
-      logger.debug(`丢弃重复事件 ${t}#${id ?? ""}`);
-      return;
-    }
     if (t === "READY") {
       const user = (
         d as { user?: { id?: string; username?: string } } | undefined
@@ -520,7 +514,6 @@ const buildAdapter = (
       passive = null;
       refs = null;
       groups.clear();
-      dedup.clear();
       selfOpenids.clear();
       avatarUrl = undefined;
     },
