@@ -24,6 +24,8 @@ export interface QQGatewayOptions {
   driver: Driver
   client: QQClient
   token: TokenManager
+  /** 网关归属的 appId,同时用作网关名(多实例按 appId 区分) */
+  appId: string
   intents: number
   logger: Logger
   reconnect: boolean
@@ -45,7 +47,15 @@ interface WsPayload {
   id?: string
 }
 
-const intentsLabel = (intents: number): string => `intents:${intents}`
+/** 官方网关主动断开码的可读翻译 */
+const CLOSE_HINTS: Readonly<Record<number, string>> = {
+  4004: 'token 无效或已过期,请检查 appId / appSecret 是否正确',
+  4010: 'intents 参数不合法',
+  4014: 'intents 对应的权限未在 QQ 开放平台开通,请到机器人管理后台勾选后重启',
+}
+
+/** 配置性错误,重连也不会成功,直接停止 */
+const NO_RECONNECT_CODES = new Set([4010, 4014])
 
 export class QQGateway {
   readonly name: string
@@ -60,13 +70,38 @@ export class QQGateway {
   private reconnectAttempts = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private stopped = false
+  private readySettled = false
+  private readyWaiter: ((ok: boolean) => void) | null = null
+  private invalidSessionTimes: number[] = []
 
   constructor(
     options: QQGatewayOptions,
     private readonly handlers: QQGatewayHandlers,
   ) {
-    this.name = `${options.client.base}#${intentsLabel(options.intents)}`
+    this.name = options.appId
     this.options = options
+  }
+
+  /**
+   * 等待首个会话就绪(READY/RESUMED)。
+   * 返回 true 表示已就绪;超时或网关停止返回 false(后台重连不受影响)。
+   */
+  waitForReady(timeoutMs: number): Promise<boolean> {
+    if (this.readySettled) return Promise.resolve(true)
+    return new Promise<boolean>((resolve) => {
+      const finish = (ok: boolean) => {
+        clearTimeout(timer)
+        this.readyWaiter = null
+        resolve(ok)
+      }
+      const timer = setTimeout(() => finish(false), Math.max(0, timeoutMs))
+      this.readyWaiter = finish
+    })
+  }
+
+  private settleReady(): void {
+    this.readySettled = true
+    this.readyWaiter?.(true)
   }
 
   async start(): Promise<void> {
@@ -85,6 +120,7 @@ export class QQGateway {
   async stop(reason?: string): Promise<void> {
     this.stopped = true
     this.clearHeartbeat()
+    this.readyWaiter?.(false)
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -115,8 +151,15 @@ export class QQGateway {
       this.clearHeartbeat()
       this.conn = null
       if (this.stopped) return
-      logger.warn(`官方网关连接断开 (code=${code}, reason=${reason}),准备重连`)
+      const hint = CLOSE_HINTS[code]
+      const detail = `${hint ? `: ${hint}` : ''}${reason ? `, reason=${reason}` : ''}`
       void this.handlers.onDisconnect(reason)
+      if (code === 4004) this.options.token.invalidate()
+      if (NO_RECONNECT_CODES.has(code)) {
+        logger.error(`官方网关连接断开 (code=${code}${detail}),停止重连,请修正配置后重启`)
+        return
+      }
+      logger.warn(`官方网关连接断开 (code=${code}${detail}),准备重连`)
       this.scheduleReconnect()
     })
     conn.onError((err) => {
@@ -166,6 +209,8 @@ export class QQGateway {
           id: payload.id,
           seq: payload.s,
         })
+        // 就绪判定放在派发之后,保证 bot 注册完成后再放行启动等待
+        if (payload.t === 'READY' || payload.t === 'RESUMED') this.settleReady()
         return
       }
       case OP_HEARTBEAT:
@@ -178,12 +223,21 @@ export class QQGateway {
         logger.info('服务端要求重连 (op 7)')
         await this.conn?.close(4000, 'server reconnect')
         return
-      case OP_INVALID_SESSION:
-        logger.warn('会话失效 (op 9),将重新 Identify')
+      case OP_INVALID_SESSION: {
+        const now = Date.now()
+        this.invalidSessionTimes = this.invalidSessionTimes.filter((t) => now - t < 120_000)
+        this.invalidSessionTimes.push(now)
+        logger.warn(`会话失效 (op 9, d=${JSON.stringify(payload.d ?? null)}),将重新 Identify`)
+        if (this.invalidSessionTimes.length === 3) {
+          logger.warn(
+            '会话短时间内反复失效,常见原因:同一 appId 在其它进程/机器上也建立了网关连接(会被互踢下线),请确认没有重复接入',
+          )
+        }
         this.sessionId = null
         this.clearHeartbeat()
         await this.conn?.close(4001, 'invalid session')
         return
+      }
       default:
         return
     }
@@ -218,6 +272,7 @@ export class QQGateway {
     const { reconnect, reconnectInterval, maxReconnectAttempts, maxReconnectInterval, logger } =
       this.options
     if (this.stopped || !reconnect) return
+    if (this.reconnectTimer) return
     if (this.reconnectAttempts >= maxReconnectAttempts) {
       logger.error(`重连次数已达上限 (${maxReconnectAttempts}),停止重连`)
       return

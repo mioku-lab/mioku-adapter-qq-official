@@ -19,6 +19,8 @@ export interface QQOfficialInstanceConfig {
   passiveWindowMs?: number
   /** 同一条消息最多被动回复次数(官方 5 次) */
   maxPassiveReplies?: number
+  /** 启动时等待网关会话就绪的超时毫秒数,0 表示不等待 */
+  readyTimeoutMs?: number
   reconnect?: boolean
   reconnectInterval?: number
   maxReconnectAttempts?: number
@@ -35,6 +37,7 @@ export const DEFAULT_INSTANCE: Required<Omit<QQOfficialInstanceConfig, 'appId' |
   forceVerifyImageResource: false,
   passiveWindowMs: 300_000,
   maxPassiveReplies: 5,
+  readyTimeoutMs: 15_000,
   reconnect: true,
   reconnectInterval: 1000,
   maxReconnectAttempts: Infinity,

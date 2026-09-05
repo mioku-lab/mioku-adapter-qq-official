@@ -3,6 +3,7 @@ import {
   defineAdapter,
   registerStatusProvider,
   avatarSet,
+  avatarGet,
   botStatus,
   conversationGetHistory,
   forwardSend,
@@ -130,6 +131,8 @@ const buildAdapter = (
   // 机器人在 openid 体系里的自身 id(官方 READY 只给平台 id,群消息 @ 令牌用的是 openid,
   // 从「内容中出现但 mentions 未收录」的 @ 令牌里学习)
   const selfOpenids = new Set<string>();
+  // /users/@me 拿到的机器人头像地址
+  let avatarUrl: string | undefined;
   let sendCount = 0;
   let receiveCount = 0;
 
@@ -305,6 +308,15 @@ const buildAdapter = (
       ),
       ctx.registerCapability(avatarSet, target, async (req) => {
         await currentBot.setAvatar(req.file);
+      }),
+      ctx.registerCapability(avatarGet, target, async () => {
+        // 官方 READY 只带 id/username,bot_id 是平台 id,qlogo 数字头像服务不可用,
+        // 头像从 /users/@me 获取并缓存
+        if (!avatarUrl && client) {
+          const info = await client.get<{ avatar?: string }>("/users/@me");
+          if (info?.avatar) avatarUrl = String(info.avatar);
+        }
+        return avatarUrl ?? null;
       }),
       ctx.registerCapability(botStatus, target, () => currentBot.getStatus()),
     ];
@@ -509,6 +521,8 @@ const buildAdapter = (
       refs = null;
       groups.clear();
       dedup.clear();
+      selfOpenids.clear();
+      avatarUrl = undefined;
     },
   };
 };

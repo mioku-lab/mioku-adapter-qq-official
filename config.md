@@ -53,6 +53,12 @@ fields:
         description: 同一条 msg_id 最多被动回复次数，官方上限 5 次，超出自动转主动消息。
         defaultValue: 5
 
+      - key: readyTimeoutMs
+        label: 启动等待就绪超时（ms）
+        type: number
+        description: 启动时等待官方网关会话就绪（READY）的最长时间，超时后转入后台重连并继续启动；设为 0 表示不等待。
+        defaultValue: 15000
+
       - key: reconnect
         label: 断线自动重连
         type: switch
