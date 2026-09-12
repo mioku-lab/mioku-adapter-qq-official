@@ -204,7 +204,6 @@ export const buildQQMessageEvent = (
       !isGroup && userId
         ? createFriendRef(bot, userId, sender.nickname)
         : undefined,
-    conversation: { type: conversation.type, id: conversation.id },
     message,
     is_to_me: isToMe,
     at,
@@ -278,7 +277,6 @@ export const buildInteractionEvent = (
     sender: { user_id: userId },
     group: isGroup && groupId ? createGroupRef(bot, groupId) : undefined,
     friend: !isGroup && userId ? createFriendRef(bot, userId) : undefined,
-    conversation: { type: conversation.type, id: conversation.id },
     message,
     is_to_me: true,
     reply: replyOf(buildParams, conversation),
