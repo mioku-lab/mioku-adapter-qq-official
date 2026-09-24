@@ -62,14 +62,39 @@ bun install
 | message.recall | ✅ | 2 分钟内;仅撤回已见过的消息(发送响应或收到的事件) |
 | message.forwardsend | ⚠️ | 合并转发拍平为多条普通消息 |
 | message.get / getforward | ⬜ 返回空 | 官方无对应 API |
-| group.getinfo / getlist | ⚠️ | 仅返回运行期间见过的群(openid),无群名 |
-| group.getmembers / member.* 查询 | ⬜ 返回空 | 官方无对应 API |
-| member.ban / kick / card / admin / title / poke 等管理动作 | ⚠️ 假完成 | 官方无对应 API,调用成功但记一次性 warn |
+| group.getinfo | ✅ | `GET /v2/groups/{id}/info`;无权限时回退本地缓存 |
+| group.getlist | ⚠️ | 仅返回运行期间见过的群(openid) |
+| group.getmembers | ✅ | `GET /v2/groups/{id}/members`,自动翻页(每页 30);需平台开通权限 |
+| member.getinfo | ✅ | `GET /v2/groups/{id}/members/{member_openid}`;需平台开通权限 |
+| member.ban | ✅ | `POST /restrict_chat_setting`,duration=0 解除禁言 |
+| member.kick | ✅ | `POST /batch_remove_members`,reject_add_request 时同时拉黑 |
+| member.card / admin / title / poke | ❌ 抛 UnsupportedCapabilityError | 官方无对应 API |
+| group.setname / setwholeban / setportrait / leave | ❌ 抛 UnsupportedCapabilityError | 官方无对应 API |
 | conversation.history | ⬜ 返回空 | 官方无对应 API |
-| friend.* | ⬜/⚠️ | 同上约定 |
+| friend.getinfo / getlist | ⬜ 返回空 | 官方无对应 API |
+| friend.delete / profile.set / avatar.set | ❌ 抛 UnsupportedCapabilityError | 官方无对应 API |
 | bot.status | ✅ | |
 
-✅ 完整支持 · ⚠️ 降级实现 · ⬜ 空值降级
+✅ 完整支持 · ⚠️ 降级实现 · ⬜ 空值降级 · ❌ 明确不支持(抛 `UnsupportedCapabilityError`)
+
+`group.getmembers` / `member.getinfo` / `member.ban` / `member.kick` / `group.getinfo` 属于平台**白名单能力**,
+未开通时官方返回错误码 `11253`,调用会抛出官方错误(不再静默假成功)。
+
+## 事件订阅
+
+默认订阅 `GROUP_AND_C2C_EVENT(1<<25) | INTERACTION(1<<26) | GROUP_MEMBER_EVENT(1<<24)`:
+
+| 官方事件 | 核心事件 |
+|---|---|
+| C2C_MESSAGE_CREATE / GROUP_AT_MESSAGE_CREATE / GROUP_MESSAGE_CREATE | `message.private` / `message.group` |
+| INTERACTION_CREATE(按钮回调) | `message.group.callback` / `message.private.callback` |
+| FRIEND_ADD / FRIEND_DEL / C2C_MSG_REJECT / C2C_MSG_RECEIVE | `notice.friend.*` |
+| GROUP_ADD_ROBOT / GROUP_DEL_ROBOT / GROUP_MSG_REJECT / GROUP_MSG_RECEIVE | `notice.group.*` |
+| GROUP_MEMBER_ADD / GROUP_MEMBER_REMOVE | `notice.group.increase` / `notice.group.decrease`(user_id = 成员 openid) |
+| GROUP_JOIN_REQUEST | `request.group.join`(`approve()` / `reject(reason)` 走官方审批接口) |
+
+`GROUP_MEMBER_EVENT` 需要平台开通权限:未开通时网关会以关闭码 4014 拒绝连接,
+适配器会**自动去掉该 intent 重连**并打印告警;也可以显式配置 `memberEvents: false` 跳过。
 
 ## 消息转换规则
 

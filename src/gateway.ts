@@ -27,6 +27,11 @@ export interface QQGatewayOptions {
   /** 网关归属的 appId,同时用作网关名(多实例按 appId 区分) */
   appId: string
   intents: number
+  /**
+   * 平台拒绝 intents(关闭码 4014)时的降级回调。
+   * 返回新的 intents 表示去掉无权限的部分后重连,返回 null 表示无法降级、停止重连
+   */
+  onIntentsRejected?: (current: number) => number | null
   logger: Logger
   reconnect: boolean
   reconnectInterval: number
@@ -156,6 +161,19 @@ export class QQGateway {
       void this.handlers.onDisconnect(reason)
       if (code === 4004) this.options.token.invalidate()
       if (NO_RECONNECT_CODES.has(code)) {
+        if (code === 4014 && this.options.onIntentsRejected) {
+          const next = this.options.onIntentsRejected(this.options.intents)
+          if (next != null && next !== this.options.intents) {
+            logger.warn(
+              `intents 权限不足,已降级为 ${next} 后重连(如需群成员事件请在开放平台开通权限)`,
+            )
+            this.options.intents = next
+            this.sessionId = null
+            this.reconnectAttempts = 0
+            this.scheduleReconnect()
+            return
+          }
+        }
         logger.error(`官方网关连接断开 (code=${code}${detail}),停止重连,请修正配置后重启`)
         return
       }

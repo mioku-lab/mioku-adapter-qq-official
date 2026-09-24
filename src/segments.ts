@@ -9,6 +9,10 @@ export interface QQUser {
   member_openid?: string
   member_role?: string
   bot?: boolean
+  /** 跨应用统一用户 OpenID,需要平台特殊申请,事件里可能为空 */
+  union_openid?: string
+  /** 与 union_openid 关联的互联应用用户信息,需要平台特殊申请 */
+  union_user_account?: string
 }
 
 export interface QQAttachment {
@@ -69,6 +73,10 @@ const roleOf = (role: string | undefined): 'owner' | 'admin' | 'member' | undefi
   return undefined
 }
 
+/**
+ * 事件里的用户标识。群聊用 member_openid(群成员接口只认这个),
+ * 单聊用 user_openid;两者都是随 AppID 隔离的 openid,不是 QQ 号
+ */
 export const userIdOf = (payload: QQMessagePayload): string => {
   const author = payload.author
   return String(

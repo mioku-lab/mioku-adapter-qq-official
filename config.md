@@ -64,6 +64,12 @@ fields:
         type: switch
         description: 网关断开后是否自动重连（优先恢复会话补发漏掉的事件）。
         defaultValue: true
+
+      - key: memberEvents
+        label: 群成员事件
+        type: switch
+        description: 订阅群成员加入/退出与入群申请事件（GROUP_MEMBER_EVENT，需要平台开通权限）。未开通时网关以 4014 拒绝连接，适配器会自动去掉该 intent 重连。
+        defaultValue: true
 ---
 
 # qq-official 适配器配置

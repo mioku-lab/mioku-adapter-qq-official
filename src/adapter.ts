@@ -34,9 +34,10 @@ import {
 import {
   API_BASE,
   DEFAULT_INSTANCE,
-  DEFAULT_INTENTS,
+  MEMBER_EVENT_INTENT,
   SANDBOX_API_BASE,
   normalizeInstances,
+  resolveIntents,
 } from "./config";
 import { QQClient } from "./client";
 import { QQGateway } from "./gateway";
@@ -47,11 +48,13 @@ import { TokenManager } from "./token";
 import { createQQBot, type QQOfficialBot, type QQOfficialBotData } from "./bot";
 import {
   buildInteractionEvent,
+  buildQQJoinRequestEvent,
   buildQQMessageEvent,
   buildQQNoticeEvent,
   noticeMappingOf,
   type MessageType,
   type QQInteractionPayload,
+  type QQJoinRequestPayload,
 } from "./events";
 import type { QQMessagePayload } from "./segments";
 import { version as adapterVersion } from "../package.json" with { type: "json" };
@@ -105,7 +108,7 @@ const buildAdapter = (
   const resolved = { ...DEFAULT_INSTANCE, ...instance };
   const apiBase =
     instance.apiBase ?? (resolved.sandbox ? SANDBOX_API_BASE : API_BASE);
-  const intents = instance.intents ?? DEFAULT_INTENTS;
+  const intents = resolveIntents(instance);
 
   const botData: QQOfficialBotData = {
     bot_id: String(instance.appId),
@@ -406,6 +409,22 @@ const buildAdapter = (
       return;
     }
 
+    if (t === "GROUP_JOIN_REQUEST") {
+      const params = eventParams();
+      if (!params || !context) return;
+      const event = buildQQJoinRequestEvent({
+        ...params,
+        d: d as QQJoinRequestPayload,
+      });
+      if (event) {
+        logger.info(
+          `[群:${event.group_id}] 入群申请 申请人=${event.user_id} 验证信息=${event.comment ?? ""}`,
+        );
+        await context.dispatch(event);
+      }
+      return;
+    }
+
     const mapping = noticeMappingOf(t);
     if (mapping) {
       const params = eventParams();
@@ -450,6 +469,14 @@ const buildAdapter = (
           token,
           appId: String(instance.appId),
           intents,
+          onIntentsRejected: (current) => {
+            const next = current & ~MEMBER_EVENT_INTENT;
+            if (next === current) return null;
+            logger.warn(
+              "当前机器人未开通群成员事件(GROUP_MEMBER_EVENT)权限,已去掉该 intent 重连;如需群成员加入/退出与入群申请事件,请在 QQ 开放平台申请权限",
+            );
+            return next;
+          },
           logger,
           reconnect: resolved.reconnect,
           reconnectInterval: resolved.reconnectInterval,

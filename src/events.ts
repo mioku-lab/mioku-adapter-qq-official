@@ -22,6 +22,7 @@ import type {
   Message,
   MessageEvent,
   NoticeEvent,
+  RequestEvent,
   Bot,
   MessageInput,
   MessageSegment,
@@ -295,6 +296,17 @@ const NOTICE_MAP: Record<string, { noticeType: string; subType: string }> = {
   GROUP_DEL_ROBOT: { noticeType: "group", subType: "decrease" },
   GROUP_MSG_REJECT: { noticeType: "group", subType: "msg_reject" },
   GROUP_MSG_RECEIVE: { noticeType: "group", subType: "msg_receive" },
+  GROUP_MEMBER_ADD: { noticeType: "group", subType: "increase" },
+  GROUP_MEMBER_REMOVE: { noticeType: "group", subType: "decrease" },
+};
+
+/** 群成员变动事件的 user_id 优先取 member_openid(与群成员接口一致) */
+const noticeUserIdOf = (d: Record<string, unknown>): string | undefined => {
+  for (const key of ["member_openid", "user_openid", "op_member_openid"]) {
+    const value = d[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
 };
 
 export const noticeMappingOf = (eventType: string) => NOTICE_MAP[eventType];
@@ -331,10 +343,74 @@ export const buildQQNoticeEvent = (
     raw: d,
     notice_type: mapping.noticeType,
     sub_type: mapping.subType,
-    user_id: typeof d.user_openid === "string" ? d.user_openid : undefined,
+    user_id: noticeUserIdOf(d),
+    operator_id:
+      typeof d.op_member_openid === "string" ? d.op_member_openid : undefined,
     group_id:
       isGroup && typeof d.group_openid === "string"
         ? d.group_openid
         : undefined,
   };
 };
+
+export interface QQJoinRequestPayload {
+  group_openid?: string
+  join_request_id?: string
+  member_openid?: string
+  user_openid?: string
+  username?: string
+  union_openid?: string
+  apply_at?: string
+  apply_source?: string
+  invited_by?: string
+  bot?: boolean
+  verify_info?: { method?: string; verify_message?: string }
+  auto_approved?: { strategy_id?: string }
+}
+
+/** 入群申请事件 → 核心 RequestEvent,approve/reject 走官方审批接口 */
+export const buildQQJoinRequestEvent = (
+  params: EventBuildParams & { d: QQJoinRequestPayload },
+): RequestEvent | null => {
+  const { adapterName, bot, client, d } = params
+  const groupId = String(d.group_openid ?? "")
+  const userId = String(d.member_openid ?? d.user_openid ?? "")
+  const flag = String(d.join_request_id ?? "")
+  if (!groupId || !userId || !flag) return null
+
+  const time = d.apply_at ? Date.parse(d.apply_at) : undefined
+  const path = `/v2/groups/${groupId}/approval_join_request/${userId}`
+
+  return {
+    kind: "request",
+    type: "request",
+    routes: buildRoutes(adapterName, "request", "group", "join"),
+    identity: {
+      adapter: adapterName,
+      bot_id: bot.bot_id,
+      event_type: "request.group.join",
+      timestamp: Number.isFinite(time) ? time : undefined,
+      native_event_id: flag,
+    },
+    self_id: bot.bot_id,
+    bot,
+    time: Number.isFinite(time) ? time : undefined,
+    raw: d,
+    request_type: "group",
+    sub_type: "join",
+    user_id: userId,
+    group_id: groupId,
+    flag,
+    comment: d.verify_info?.verify_message,
+    approve: async () => {
+      await client.post(path, { op: "approve", join_request_id: flag })
+    },
+    reject: async (reason?: string) => {
+      await client.post(path, {
+        op: "decline",
+        join_request_id: flag,
+        ...(reason ? { reject_reason: reason } : {}),
+      })
+    },
+  }
+}

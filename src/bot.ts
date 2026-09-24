@@ -13,6 +13,9 @@ import type {
   SentMessage,
 } from 'mioku'
 
+import { UnsupportedCapabilityError } from 'mioku'
+
+import { QQApiError } from './client'
 import { buildKeyboard, buildSendUnits, degradeMarkdown, shouldDegrade, type SendUnit } from './payload'
 import type { QQClient } from './client'
 import type { MediaUploader } from './media'
@@ -64,6 +67,51 @@ interface ResolvedTarget {
 
 /** 被动回复失效/超限:去掉 msg_id/event_id 转主动消息重发 */
 const PASSIVE_EXPIRED_CODES = ['40034128', '40034005', '304103']
+
+/** 群成员列表单次最多 30 条,这里最多翻 40 页(1200 人)避免异常游标导致死循环 */
+const MAX_MEMBER_PAGES = 40
+
+interface QQGroupMemberPayload {
+  member_openid?: string
+  username?: string
+  member_role?: string
+  bot?: boolean
+  joined_at?: string
+  union_openid?: string
+}
+
+interface QQGroupInfoPayload {
+  group_openid?: string
+  group_name?: string
+  group_finger_memo?: string
+  group_class_text?: string
+  group_tags?: string[]
+  group_member_num?: number
+}
+
+const describeError = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err)
+
+const unsupported = (capability: string, hint: string): UnsupportedCapabilityError => {
+  const error = new UnsupportedCapabilityError(capability)
+  error.message = `${hint}(${capability})`
+  return error
+}
+
+const mapMember = (raw: QQGroupMemberPayload | null | undefined): MemberInfo | null => {
+  if (!raw || typeof raw !== 'object') return null
+  const userId = String(raw.member_openid ?? '')
+  if (!userId) return null
+  const joinedAt = raw.joined_at ? Date.parse(raw.joined_at) : NaN
+  return {
+    user_id: userId,
+    nickname: typeof raw.username === 'string' ? raw.username : undefined,
+    role: typeof raw.member_role === 'string' ? raw.member_role : undefined,
+    join_time: Number.isFinite(joinedAt) ? joinedAt : undefined,
+    is_bot: Boolean(raw.bot),
+    union_openid: raw.union_openid,
+  }
+}
 
 const targetOf = (target: MessageTarget): ResolvedTarget | null => {
   if (target.type === 'group' && target.group_id) {
@@ -240,61 +288,132 @@ export const createQQBot = (params: QQOfficialBotParams): AdapterBotBase<QQOffic
     },
 
     async getGroupInfo(groupId: string): Promise<GroupInfo | null> {
-      return groups.get(String(groupId)) ?? null
+      const id = String(groupId)
+      try {
+        const res = await client.get<QQGroupInfoPayload>(`/v2/groups/${id}/info`)
+        if (res && typeof res === 'object') {
+          const info: GroupInfo = {
+            group_id: String(res.group_openid ?? id),
+            group_name:
+              typeof res.group_name === 'string' ? res.group_name : undefined,
+            member_count:
+              typeof res.group_member_num === 'number'
+                ? res.group_member_num
+                : undefined,
+            memo: res.group_finger_memo,
+            tags: res.group_tags,
+          }
+          groups.set(id, info)
+          return info
+        }
+      } catch (err) {
+        warnOnce(
+          'group.info',
+          `获取群信息接口不可用(多为未开通权限),回退本地缓存的群信息: ${describeError(err)}`,
+        )
+      }
+      return groups.get(id) ?? null
     },
 
     async getGroupList(): Promise<GroupInfo[]> {
       return [...groups.values()]
     },
 
-    async getGroupMembers(): Promise<MemberInfo[]> {
-      warnOnce('group.getmembers', '官方通道不支持获取群成员列表,返回空')
-      return []
+    async getGroupMembers(groupId: string): Promise<MemberInfo[]> {
+      const id = String(groupId)
+      const members: MemberInfo[] = []
+      let cursor = ''
+      for (let page = 0; page < MAX_MEMBER_PAGES; page += 1) {
+        const res = await client.get<{
+          members?: QQGroupMemberPayload[]
+          next_cursor?: string
+        }>(
+          `/v2/groups/${id}/members${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+        )
+        for (const item of res?.members ?? []) {
+          const member = mapMember(item)
+          if (member) members.push(member)
+        }
+        const next = String(res?.next_cursor ?? '')
+        if (!next) break
+        cursor = next
+      }
+      return members
     },
 
-    async getMemberInfo(): Promise<MemberInfo | null> {
-      warnOnce('member.getinfo', '官方通道不支持获取成员信息,返回 null')
-      return null
+    async getMemberInfo(
+      groupId: string,
+      userId: string,
+    ): Promise<MemberInfo | null> {
+      const res = await client.get<QQGroupMemberPayload>(
+        `/v2/groups/${String(groupId)}/members/${String(userId)}`,
+      )
+      return mapMember(res)
     },
 
-    async banMember(): Promise<void> {
-      warnOnce('member.ban', '官方通道不支持群禁言,已忽略')
+    async banMember(
+      groupId: string,
+      userId: string,
+      duration: number,
+    ): Promise<void> {
+      const path = `/v2/groups/${String(groupId)}/restrict_chat_setting`
+      const mute = duration > 0
+      const entry = {
+        op: mute ? 'add' : 'del',
+        member_openid: String(userId),
+        mute_expire_at: mute
+          ? new Date(Date.now() + duration * 1000).toISOString()
+          : '',
+      }
+      try {
+        await client.post(path, { members: [entry] })
+      } catch (err) {
+        if (!mute || !(err instanceof QQApiError)) throw err
+        await client.post(path, { members: [{ ...entry, op: 'update' }] })
+      }
     },
 
-    async kickMember(): Promise<void> {
-      warnOnce('member.kick', '官方通道不支持踢出成员,已忽略')
+    async kickMember(
+      groupId: string,
+      userId: string,
+      rejectAddRequest?: boolean,
+    ): Promise<void> {
+      await client.post(`/v2/groups/${String(groupId)}/batch_remove_members`, {
+        member_openids: [String(userId)],
+        add_to_member_blacklist: Boolean(rejectAddRequest),
+      })
     },
 
     async setMemberCard(): Promise<void> {
-      warnOnce('member.setcard', '官方通道不支持设置群名片,已忽略')
+      throw unsupported('member.setcard', '官方通道不支持设置群名片')
     },
 
     async setMemberAdmin(): Promise<void> {
-      warnOnce('member.setadmin', '官方通道不支持设置管理员,已忽略')
+      throw unsupported('member.setadmin', '官方通道不支持设置管理员')
     },
 
     async setMemberTitle(): Promise<void> {
-      warnOnce('member.settitle', '官方通道不支持设置头衔,已忽略')
+      throw unsupported('member.settitle', '官方通道不支持设置头衔')
     },
 
     async pokeMember(): Promise<void> {
-      warnOnce('member.poke', '官方通道不支持戳一戳,已忽略')
+      throw unsupported('member.poke', '官方通道不支持戳一戳')
     },
 
     async setGroupName(): Promise<void> {
-      warnOnce('group.setname', '官方通道不支持修改群名,已忽略')
+      throw unsupported('group.setname', '官方通道不支持修改群名')
     },
 
     async setGroupWholeBan(): Promise<void> {
-      warnOnce('group.wholeban', '官方通道不支持全员禁言,已忽略')
+      throw unsupported('group.wholeban', '官方通道不支持全员禁言')
     },
 
     async setGroupPortrait(): Promise<void> {
-      warnOnce('group.portrait', '官方通道不支持设置群头像,已忽略')
+      throw unsupported('group.portrait', '官方通道不支持设置群头像')
     },
 
     async leaveGroup(): Promise<void> {
-      warnOnce('group.leave', '官方通道不支持退出群聊,已忽略')
+      throw unsupported('group.leave', '官方通道不支持退出群聊')
     },
 
     async getFriendInfo(): Promise<null> {
@@ -308,15 +427,15 @@ export const createQQBot = (params: QQOfficialBotParams): AdapterBotBase<QQOffic
     },
 
     async deleteFriend(): Promise<void> {
-      warnOnce('friend.delete', '官方通道不支持删除好友,已忽略')
+      throw unsupported('friend.delete', '官方通道不支持删除好友')
     },
 
     async setProfile(): Promise<void> {
-      warnOnce('profile.set', '官方通道不支持修改资料,已忽略')
+      throw unsupported('profile.set', '官方通道不支持修改资料')
     },
 
     async setAvatar(): Promise<void> {
-      warnOnce('avatar.set', '官方通道不支持修改头像,已忽略')
+      throw unsupported('avatar.set', '官方通道不支持修改头像')
     },
 
     async getHistory(): Promise<HistoryMessage[]> {

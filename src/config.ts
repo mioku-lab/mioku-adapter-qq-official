@@ -5,8 +5,14 @@ export interface QQOfficialInstanceConfig {
   sandbox?: boolean
   /** 覆盖 OpenAPI base URL */
   apiBase?: string
-  /** 覆盖订阅 intents(默认 群/单聊事件 + 交互事件) */
+  /** 覆盖订阅 intents(默认 群/单聊事件 + 交互事件 + 群成员事件) */
   intents?: number
+  /**
+   * 是否订阅群成员变动/入群申请事件(GROUP_MEMBER_EVENT 1<<24)。
+   * 该 intent 需要在 QQ 开放平台开通权限,未开通时网关会以 4014 拒绝连接,
+   * 适配器会自动去掉该 intent 重连。默认 true
+   */
+  memberEvents?: boolean
   /**
    * 图片发送方式:
    * - markdown:图片嵌入 markdown 单卡片发送,要求图片 URL 公网可访问
@@ -33,6 +39,7 @@ export interface QQOfficialAdapterConfig {
 
 export const DEFAULT_INSTANCE: Required<Omit<QQOfficialInstanceConfig, 'appId' | 'appSecret' | 'apiBase' | 'intents'>> = {
   sandbox: false,
+  memberEvents: true,
   imageMode: 'markdown',
   forceVerifyImageResource: false,
   passiveWindowMs: 300_000,
@@ -49,7 +56,23 @@ export const SANDBOX_API_BASE = 'https://sandbox.api.sgroup.qq.com'
 export const TOKEN_URL = `${API_BASE}/app/getAppAccessToken`
 
 /** GROUP_AND_C2C_EVENT(1<<25) | INTERACTION(1<<26) */
-export const DEFAULT_INTENTS = (1 << 25) | (1 << 26)
+export const BASE_INTENTS = (1 << 25) | (1 << 26)
+
+/** GROUP_MEMBER_EVENT(1<<24):群成员加入/退出/入群申请,需要平台开通权限 */
+export const MEMBER_EVENT_INTENT = 1 << 24
+
+export const DEFAULT_INTENTS = BASE_INTENTS | MEMBER_EVENT_INTENT
+
+/** 按实例配置解析最终 intents;memberEvents=false 时不请求群成员事件 */
+export const resolveIntents = (config: {
+  intents?: number
+  memberEvents?: boolean
+}): number => {
+  if (typeof config.intents === 'number') return config.intents
+  return config.memberEvents === false
+    ? BASE_INTENTS
+    : BASE_INTENTS | MEMBER_EVENT_INTENT
+}
 
 export const normalizeInstances = (input: unknown): QQOfficialInstanceConfig[] => {
   if (!input) return []
